@@ -1,10 +1,6 @@
 import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
 from fafbseg import flywire
 import numpy as np
-from scipy.spatial.distance import pdist, squareform
-from scipy.stats import pearsonr
 import os
 
 # Define MN IDs (from find_disinhibition_paths.py)
@@ -138,52 +134,6 @@ def save_connectivity_matrix(df, title_suffix="", min_weight_filter=0, reindex_c
         print(f"Error saving matrix: {e}")
         
     return matrix
-
-def compare_input_similarity(mat_direct, mat_effective):
-    """
-    Compare the similarity structure of inputs to MNs between Direct (Premotor->MN) 
-    and Effective (Upstream->MN) pathways.
-    """
-    print("\n--- Comparing Input Similarity (RSA) ---")
-    
-    if mat_direct is None or mat_effective is None:
-        print("One of the matrices is None.")
-        return
-
-    # 1. Align columns (MNs)
-    common_mns = mat_direct.columns.intersection(mat_effective.columns)
-    mat_dir = mat_direct[common_mns].fillna(0)
-    mat_eff = mat_effective[common_mns].fillna(0)
-    
-    # Filter columns with non-zero variance for correlation metric
-    valid_cols = (mat_dir.std() > 0) & (mat_eff.std() > 0)
-    mat_dir_rsa = mat_dir.loc[:, valid_cols]
-    mat_eff_rsa = mat_eff.loc[:, valid_cols]
-    
-    if mat_dir_rsa.shape[1] < 3:
-        print(f"Not enough valid MNs (with non-zero variance) for RSA. Valid: {mat_dir_rsa.shape[1]}")
-    else:
-        print(f"Using {mat_dir_rsa.shape[1]} MNs for RSA comparison.")
-        # Compute distance matrices (MN x MN)
-        # Transpose: Rows=MNs
-        d_dir = pdist(mat_dir_rsa.T, metric='correlation')
-        d_eff = pdist(mat_eff_rsa.T, metric='correlation')
-        
-        # Correlate
-        r, p = pearsonr(d_dir, d_eff)
-        print(f"RSA Correlation (Input Pattern Similarity): r={r:.3f}, p={p:.3e}")
-    
-    # 2. Total Drive Correlation (using all common MNs)
-    drive_dir = mat_dir.sum(axis=0)
-    drive_eff = mat_eff.sum(axis=0)
-    
-    if len(drive_dir) > 1:
-        r_drive, p_drive = pearsonr(drive_dir, drive_eff)
-        print(f"Total Drive Correlation (n={len(drive_dir)}): r={r_drive:.3f}, p={p_drive:.3e}")
-    else:
-        print("Not enough MNs for drive correlation.")
-
-def calculate_effective_connectivity(df_upstream, df_downstream):
     """
     Calculate effective connectivity A -> B -> C.
     df_upstream: A -> B (cols: pre, post, weight/signed_weight)
@@ -236,118 +186,26 @@ def main():
         print(f"Loading existing file: {file_mn}")
         df_mn = pd.read_csv(file_mn)
     else:
-        # B -> C
         df_mn = get_upstream_connections(mn_all, min_weight=min_weight_query)
         
         if df_mn.empty:
             print("No premotor neurons found.")
             return
 
-        # Set signed weight for B -> C
         df_mn['signed_weight'] = df_mn.apply(apply_signed_weight, axis=1)
         
         # Save processed data
         df_mn.to_csv(file_mn, index=False)
         print(f"Saved {file_mn}")
     
-    # Filter out MNs from sources (pre) in df_mn
     df_mn = df_mn[~df_mn['pre'].isin(mn_all)]
     print(f"Filtered df_mn (excluding MN sources): {len(df_mn)} connections.")
 
-    # Save B->C matrix
-    # Ensure all MNs are columns
     mat_direct = save_connectivity_matrix(df_mn, title_suffix="Premotor to MN", min_weight_filter=min_weight_query, reindex_cols=mn_all)
     
     if mat_direct is None:
         print("No direct connectivity matrix generated.")
         return
-
-    # --- Part 2: Ach Upstream -> Premotor -> MN ---
-    print("\n--- Part 2: Analyzing Ach Upstream -> Premotor -> MN ---")
-    
-    # 1. Identify Premotor Neurons (B)
-    # Use the rows of mat_direct to ensure consistency
-    premotor_ids = mat_direct.index.tolist()
-    print(f"Found {len(premotor_ids)} premotor neurons (from direct matrix).")
-    
-    file_upstream = "upstream_to_premotor_all.csv"
-    
-    if os.path.exists(file_upstream):
-        print(f"Loading existing file: {file_upstream}")
-        df_upstream = pd.read_csv(file_upstream)
-    else:
-        # 2. Query Upstream of Premotor (A -> B)
-        # This might be large, so we might want to batch it if it fails, but let's try direct.
-        df_upstream = get_upstream_connections(premotor_ids, min_weight=min_weight_query)
-        
-        if not df_upstream.empty:
-            df_upstream.to_csv(file_upstream, index=False)
-            print(f"Saved {file_upstream}")
-    
-    if df_upstream.empty:
-        print("No upstream connections to premotor found.")
-        return
-        
-    # 3. Filter for Ach Upstream (A is Ach)
-    # Check if 'top_nt' exists
-    if 'top_nt' in df_upstream.columns:
-        ach_mask = df_upstream['top_nt'].isin(['ach', 'acetylcholine'])
-        df_upstream_ach = df_upstream[ach_mask].copy()
-        print(f"Filtered for Ach upstream: {len(df_upstream_ach)} connections from {df_upstream_ach['pre'].nunique()} Ach neurons.")
-    else:
-        print("No NT info for upstream, cannot filter for Ach.")
-        return
-
-    if df_upstream_ach.empty:
-        print("No Ach upstream neurons found.")
-        return
-
-    # Filter out MNs from sources (pre) in df_upstream_ach
-    df_upstream_ach = df_upstream_ach[~df_upstream_ach['pre'].isin(mn_all)]
-    print(f"Filtered Ach upstream (excluding MNs): {len(df_upstream_ach)} connections.")
-
-    if df_upstream_ach.empty:
-        print("No Ach upstream neurons found after excluding MNs.")
-        return
-
-    # Save Matrix for Ach Upstream -> Premotor
-    # Since we filtered for Ach, signed_weight is just weight
-    df_upstream_ach['signed_weight'] = df_upstream_ach['weight']
-    # Ensure columns match the premotor neurons in mat_direct
-    save_connectivity_matrix(df_upstream_ach, title_suffix="Ach Upstream to Premotor", min_weight_filter=min_weight_query, reindex_cols=premotor_ids)
-
-    # Save Matrix for Ach Upstream -> Ach Premotor
-    ach_premotor_ids = df_mn[df_mn['top_nt'].isin(['ach', 'acetylcholine'])]['pre'].unique().tolist()
-    ach_premotor_ids = [x for x in ach_premotor_ids if x in premotor_ids]
-    print(f"Found {len(ach_premotor_ids)} Ach Premotor neurons for sub-matrix.")
-    
-    df_upstream_ach_ach = df_upstream_ach[df_upstream_ach['post'].isin(ach_premotor_ids)]
-    save_connectivity_matrix(df_upstream_ach_ach, title_suffix="Ach Upstream to Ach Premotor", min_weight_filter=min_weight_query, reindex_cols=ach_premotor_ids)
-
-    # 4. Calculate Effective Connectivity (A -> C)
-    # A (Ach) -> B (Any) -> C (MN)
-    # Weight A->B is positive (Ach). Weight B->C is signed.
-    mat_effective = calculate_effective_connectivity(df_upstream_ach, df_mn)
-    
-    if not mat_effective.empty:
-        # Save Matrix
-        filename = f"matrix_effective_AchUpstream_to_MN_min{min_weight_query}.csv"
-        mat_effective.to_csv(filename)
-        print(f"Saved effective connectivity matrix to {filename}")
-        
-        # Compare Similarity
-        compare_input_similarity(mat_direct, mat_effective)
-        
-        # Also save a filtered version
-        # Filter rows with low max effective weight
-        min_eff_weight = 20 # Arbitrary threshold for "effective"
-        mask = mat_effective.abs().max(axis=1) >= min_eff_weight
-        mat_effective_filtered = mat_effective.loc[mask]
-        
-        if not mat_effective_filtered.empty:
-            filename_filt = f"matrix_effective_AchUpstream_to_MN_min{min_weight_query}_filtered{min_eff_weight}.csv"
-            mat_effective_filtered.to_csv(filename_filt)
-            print(f"Saved filtered effective matrix to {filename_filt}")
 
 if __name__ == "__main__":
     main()
