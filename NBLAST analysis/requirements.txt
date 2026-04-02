@@ -1,0 +1,13 @@
+navis[all]>=1.10.0
+fafbseg>=3.1.0
+cloud-volume>=12.0.0
+caveclient>=7.4.0
+neuprint-python>=0.5.0
+pynrrd>=1.1.0
+pyyaml>=6.0.0
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.8.0
+scipy>=1.11.0
+seaborn>=0.13.0
+pykdtree>=1.4.0
